@@ -1,7 +1,9 @@
 import collections
 import bisect
-from datetime import timedelta
 from enum import Enum
+
+from .timeseries import TimeSeries
+from .moving_average import MovingAverage
 
 PriceEvent = collections.namedtuple("PriceEvent", ["timestamp", "price"])
 
@@ -18,7 +20,7 @@ class Stock(object):
 
     def __init__(self, symbol):
         self.symbol = symbol
-        self.price_history = []
+        self.history = TimeSeries()
 
     def update(self, timestamp, price):
         if price < 0:
@@ -27,16 +29,20 @@ class Stock(object):
 
     @property
     def price(self):
-        return self.price_history[-1][1] if self.price_history else None
+        try:
+            return self.history[-1].value
+        except IndexError:
+            return None
 
     def is_increasing_trend(self):
-        return self.price_history[-3].price < self.price_history[-2].price < self.price_history[-1].price
+        return self.history[-3].value < \
+               self.history[-2].value < self.history[-1].value
 
     def get_corssover_signal(self, on_date):
         NUM_DAYS = self.LONG_TERM_TIMESPAN + 1
 
         closing_price_list = \
-            self._get_closing_price_list(on_date, NUM_DAYS)
+            self.history.get_closing_price_list(on_date, NUM_DAYS)
 
         if len(closing_price_list) < 11:
             return StockSignal.neutral
@@ -48,14 +54,10 @@ class Stock(object):
         prev_short_term_series = \
             closing_price_list[-self.SHORT_TERM_TIMESPAN-1:-1]
 
-        long_term_ma = sum([update.price for update in long_term_series]) \
-            / self.LONG_TERM_TIMESPAN
-        prev_long_term_ma = sum([update.price for update in prev_long_term_series]) \
-            / self.LONG_TERM_TIMESPAN
-        short_term_ma = sum([update.price for update in short_term_series]) \
-            / self.SHORT_TERM_TIMESPAN
-        prev_short_term_ma = sum([update.price for update in prev_short_term_series]) \
-            / self.SHORT_TERM_TIMESPAN
+        long_term_ma = MovingAverage.calc_ma(long_term_series, self.LONG_TERM_TIMESPAN)
+        prev_long_term_ma = MovingAverage.calc_ma(prev_long_term_series, self.LONG_TERM_TIMESPAN)
+        short_term_ma = MovingAverage.calc_ma(short_term_series, self.SHORT_TERM_TIMESPAN)
+        prev_short_term_ma = MovingAverage.calc_ma(prev_short_term_series, self.SHORT_TERM_TIMESPAN)
 
         # BUY signal
         if self._is_short_term_below_to_above(prev_short_term_ma,
@@ -72,22 +74,6 @@ class Stock(object):
             return StockSignal.sell
 
         return StockSignal.neutral
-
-    def _get_closing_price_list(self, on_date, num_days):
-        closing_price_list = []
-        for i in range(num_days):
-            chk = on_date.date() - timedelta(i)
-            for price_event in reversed(self.price_history):
-                if price_event.timestamp.date() > chk:
-                    pass
-                if price_event.timestamp.date() == chk:
-                    closing_price_list.insert(0, price_event)
-                    break
-                if price_event.timestamp.date() < chk:
-                    closing_price_list.insert(0, price_event)
-                    break
-
-        return closing_price_list
 
     @staticmethod
     def _is_short_term_below_to_above(prev_ma, prev_reference_ma,
